@@ -1,15 +1,28 @@
 # Load dependencies ####
 source ("coreTRA.R")
-source("FRS.R")
-source("RCS.R")
-source("syntheticData.R")
-source ("plotting.R")
-source("multicollinearity.R")
+source("standardization.R")
+source("demons.R")
+
 
 library(pastecs)
 library(fBasics)
 library (bbmle)
 library(reshape2)
+library(dplR)
+library(ggplot2)
+library(gtools)
+library(ddply)
+library(plyr)
+
+# Saving options ####
+
+# Root save path
+main_wd <- getwd()
+figure_path <- paste(getwd(), "Figures", "Pinus_banksiana", sep="/")
+
+# General pdf saving parameters
+pdf_width=11
+pdf_height=8.5
 
 # Jack pine site functions ####
 
@@ -28,14 +41,14 @@ firstYear <- function (index, tra){
 }
 
 getSiteStart <- function (tra){
-  Q.names <- dimnames(tra)[[1]]
+  I.names <- dimnames(tra)[[1]]
   
   # Get site code for each core
-  sites <- getSite(Q.names)
+  sites <- getSite(I.names)
   
   # Find first year of each core
   firstYears <- vector ()
-  for (i in Q.names){
+  for (i in I.names){
     firstYears[i] <- firstYear (i, tra)
   }
   
@@ -75,10 +88,9 @@ evenAgedTRA <- function (rwl){
 
 # Jack pine analysis ##################################################
 
-jp <- read.rwl ("C:/Users/Homeuser/Desktop/Documents/Research/TreeRingArrays/Data/masterclean.rwl")
+# Load data ####
 
-# Remove the year 2012 from the rwl table. Should not exist
-jp <- jp[-which(rownames(jp)=="2012"),]
+jp <- read.rwl ("./Data/jpcs.rwl")
 
 # Even aged
 # Convert to TRA format
@@ -88,74 +100,67 @@ jp.tra <- evenAgedTRA (jp)
 # Convert 0 values to NA
 jp.tra[which(jp.tra==0, arr.ind=T)] <- NA
 
-# Report sample depth
-print (plotSampleDepth(jp.tra, 1))
-print (plotSampleDepth(jp.tra, 2))
-print (plotSampleDepth(jp.tra, 3))
+# Convert to sparse
+jp.tra <- sparse_tra(jp.tra)
 
-# Fit the data using the two alternate models and regression functions ####
-# Optimal spans: QFA=0.0606, FA=0.0614
-jp.gam.QFA <- standardize_frs(jp.tra, T,T,T, model_type="gam", span="auto")
-jp.gam.FA <-  standardize_frs(jp.tra, F,T,T, model_type="gam", span="auto")
+# Report sample depth ####
+jp.depth.I <- sample_depth_tra(jp.tra, 1, TRUE)
+jp.depth.T <- sample_depth_tra(jp.tra, 2, TRUE)
+jp.depth.A <- sample_depth_tra(jp.tra, 3, TRUE)
+
+
+# Fit the data using the three alternate models and regression functions ####
+jp.gam.ITA <- standardize_tra(jp.tra, model=list(I=TRUE, T=TRUE, A=TRUE), method="sfs")
+jp.gam.IT <- standardize_tra(jp.tra, model=list(I=TRUE, T=TRUE, A=FALSE), method="sfs")
+jp.gam.TA <-  standardize_tra(jp.tra, model=list(I=FALSE, T=TRUE, A=TRUE), method="sfs")
+jp.gam.T <-  standardize_tra(jp.tra, model=list(I=FALSE, T=TRUE, A=FALSE), method="sfs")
 
 # Compile CV ####
-Q_jp <- data.frame("QFA"=jp.gam.QFA$cv[[1]])
-F_jp <- data.frame("QFA"=jp.gam.QFA$cv[[2]], "FA"=jp.gam.FA$cv[[2]])
-A_jp <- as.data.frame(t(smartbind("QFA"=jp.gam.QFA$cv[[3]], "FA"=jp.gam.FA$cv[[3]])))
+I_jp <- data.frame(t(smartbind("ITA"=jp.gam.ITA$effects$I, "IT"=jp.gam.IT$effects$I)))
+I_jp$i <- rownames(I_jp)
+
+T_jp <- data.frame(t(smartbind("ITA"=jp.gam.ITA$effects$T, "IT"=jp.gam.IT$effects$T, "TA"=jp.gam.TA$effects$T, "T"=jp.gam.T$effects$T)))
+T_jp$t <- rownames(T_jp)
 
 
-# Generate an age list
-ageList <- rep.int(NA, nrow(Q_jp))
-names(ageList) <- rownames (Q_jp)
+A_jp <- as.data.frame(t(smartbind("ITA"=jp.gam.ITA$effects$A, "TA"=jp.gam.TA$effects$A)))
+A_jp$a <- rownames(A_jp)
 
-for (i in 1:nrow(Q_jp)){
-  ageList[i] <- max(which(!is.na(jp.tra[i,,]), arr.ind=T)[,2])
-}
+# Add information about the age of each tree
+I_jp$age <- unlist(lapply(levels(jp.tra$i), grab_age, tra=jp.tra))
 
-# Plotting ####
+# Compile fit statistics ####
+jp.fit <- as.data.frame(t(data.frame(ITA=unlist(jp.gam.ITA$fit[3:13]),
+                     IT=unlist(jp.gam.IT$fit[3:13]),
+                     TA=unlist(jp.gam.TA$fit[3:13]),
+                     T=unlist(jp.gam.T$fit[3:13]))))
 
-# General pdf saving parameters
-# pdf_width=11
-# pdf_height=8.5
+jp.fit$dAIC <- jp.fit$AIC - min(jp.fit$AIC)
+jp.fit$dAIcC <- jp.fit$AICc - min(jp.fit$AICc)
+jp.fit$dBIC <- jp.fit$BIC - min(jp.fit$BIC)
 
-# Colours: 
-# GAM: Dark
-# LM: Light
-# 3-factor: Red
-# 2-factor: Blue
-# Uncorrected: Green
+print(jp.fit)
 
-# Root save path
-main_wd <- getwd()
-figure_path <- paste(getwd(), "Figures", "Pinus_banksiana", sep="/")
+# Plotting sample depth ####
+sample_depth_melt <- melt(jp.depth.T)
+sample_depth_melt$Year <- as.numeric(rownames(sample_depth_melt))
 
-# Saving path
-# save_path <- paste(figure_path, "Ring width", sep="/")
-# setwd(save_path)
+sample_depth_plot <- ggplot(sample_depth_melt, aes(x=Year, y=value)) + geom_area() + theme_bw() + ylab("Number of series in chronology")
 
-# Plot Q
-# Plot Q vs age
-# pdf("Q_age.pdf", width=pdf_width, height=pdf_height)
-Q_vs_age_plot (Q_jp,jp.tra) + scale_color_manual(values=c("firebrick4"))
-# dev.off()
+# Plotting effects ####
 
-# Plot mean Q by year
-# pdf("Q_year.pdf", width=pdf_width, height=pdf_height)
-meanQ_by_year_plot (Q_jp,jp.tra)  + scale_color_manual(values=c("firebrick4"))
-# dev.off()
+# Plot I
+# Plot I vs age
+I_vs_age_plot <- ggplot(melt(I_jp, id.vars=c("i", "age"), measure.vars=c("ITA", "IT")), aes(x=age, y=value)) + geom_point() + geom_smooth(colour="black") + facet_grid(variable~.) + theme_bw() + ylab("Individual effect (I)") + xlab("Age")
 
-# Plot F
-# pdf("F.pdf", width=pdf_width, height=pdf_height)
-plot.cv(F_jp, factor.type="F") + scale_color_manual(values=c("blue4", "firebrick4"))
-# dev.off()
+# Plot histogram of I
+I_hist <- ggplot(melt(I_jp, id.vars=c("i", "age"), measure.vars=c("ITA", "IT")), aes(x=value, colour=variable, fill=variable)) + geom_density(alpha=0.5)+theme_bw()+xlab("Individual effect (I)") + ylab("Density") + scale_fill_manual(values=c("grey20", "grey50")) + scale_colour_manual(values=c("grey20", "grey50"))+theme(legend.title=element_blank()) + theme(legend.position=c(0.9,0.85)) +  scale_x_log10(breaks=c(0.25, 0.5, 1, 2, 4), lim=c(0.25, 4))+geom_vline(x=1)
+
+# Plot T
+T_plot <- ggplot(melt(T_jp), aes(x=as.numeric(t), y=value)) + geom_line()+ facet_grid(variable~.)+theme_bw()+xlab("Year") + ylab("Time effect (T)") +geom_hline(y=1) + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000))
 
 # Plot A
-# pdf("A.pdf", width=pdf_width, height=pdf_height)
-plot.cv(A_jp, factor.type="A")  + scale_color_manual(values=c("blue4", "firebrick4"))+ylab("Ring width (mm)")
-# dev.off()
-
-# Reset working directory
-# setwd(main_wd)
+A_plot <- ggplot(melt(A_jp), aes(x=as.numeric(a), y=value)) + geom_line()+ facet_grid(variable~.)+theme_bw()+xlab("Age") + ylab("Age effect (A) in mm")
 
 # Diagnostics ####
 
@@ -163,111 +168,41 @@ plot.cv(A_jp, factor.type="A")  + scale_color_manual(values=c("blue4", "firebric
 # save_path <- paste(figure_path, "Residuals", sep="/")
 # setwd(save_path)
 
-# Check if Q is correlated with age
-my_cor.test<- function(...){
-  return(cor.test(..., method="spearman"))
-}
+# Check if I is correlated with age
+I_age_corr <- sapply(I_jp[, c("ITA", "IT")], cor.test, y=I_jp$age, method="spearman")
 
-sapply(Q_jp, cor.test, y=ageList, method="spearman")
+# Test if there is a trend in time or age effects
+T_trend <- sapply(T_jp[, c("ITA", "IT", "TA", "T")], cor.test, y=as.numeric(T_jp$t), method="spearman")
+A_trend <- sapply(A_jp[, c("ITA", "TA")], cor.test, y=as.numeric(A_jp$a), method="spearman")
 
-# Test if there is a trend in forcing or age
-sapply(F_jp, my_cor.test, y=as.numeric(rownames(F_jp)))
-sapply(A_jp, my_cor.test, y=as.numeric(rownames(A_jp)))
+# Test for correlations between the estimated effects
+cor_I <- cor(log(I_jp[, c("ITA", "IT")]))
+cor_T <- cor(log(T_jp[, c("ITA", "IT", "TA", "T")]))
+cor_A <- cor(log(A_jp[, c("ITA", "TA")]))
 
-# # Check the residuals
-# raw_jp <- data.frame(x=jp.tra[!is.na(jp.tra)])
-# raw_jp [raw_jp==0] <- NA
-# log_jp <-  log(raw_jp)
-# resid_gam_jp_2 <- data.frame(x=residuals (jp.gam.FA$model))
-# resid_gam_jp_3 <- data.frame(x=residuals (jp.gam.QFA$model))
-# resid_lm_jp_2 <- data.frame(x=residuals (jp.lm.FA$model))
-# resid_lm_jp_3 <- data.frame(x=residuals (jp.lm.QFA$model))
-# 
-# # Residual standard deviation
-# sapply(log_jp, sd)
-# sapply(resid_gam_jp_2, sd)
-# sapply(resid_gam_jp_3, sd)
-# sapply(resid_lm_jp_2, sd)
-# sapply(resid_lm_jp_3, sd)
-# 
-# # Q-Q plots
-# qq_raw <- as.data.frame(qqnorm(raw_jp$x))
-# qq_log <- as.data.frame(qqnorm(log_jp$x))
-# qq_gam_resid_2 <- as.data.frame(qqnorm(resid_gam_jp_2$x))
-# qq_gam_resid_3 <- as.data.frame(qqnorm(resid_gam_jp_3$x))
-# qq_lm_resid_2 <- as.data.frame(qqnorm(resid_lm_jp_2$x))
-# qq_lm_resid_3 <- as.data.frame(qqnorm(resid_lm_jp_3$x))
-# 
-# pdf("qq_raw.pdf", width=pdf_width, height=pdf_height)
-# ggplot(data=qq_raw, aes(x=x, y=y))+geom_point()+theme_bw()+ylab("Sample Quantiles")+xlab("Theoretical Quantiles")+ geom_abline(intercept = 
-#                                                                                                                                  mean(qq_raw$y), slope = sd(qq_raw$y)) 
-# dev.off()
-# 
-# pdf("qq_log.pdf", width=pdf_width, height=pdf_height)
-# ggplot(data=qq_log, aes(x=x, y=y))+geom_point()+theme_bw()+ylab("Sample Quantiles")+xlab("Theoretical Quantiles")+ geom_abline(intercept = mean(qq_log$y), slope = sd(qq_log$y))
-# dev.off()
-# 
-# pdf("qq_gam_2.pdf", width=pdf_width, height=pdf_height)
-# ggplot(data=qq_gam_resid_2, aes(x=x, y=y))+geom_point()+theme_bw()+ylab("Sample Quantiles")+xlab("Theoretical Quantiles")+ geom_abline(intercept = mean(qq_gam_resid_2$y), slope = sd(qq_gam_resid_2$y))
-# dev.off()
-# 
-# pdf("qq_gam_3.pdf", width=pdf_width, height=pdf_height)
-# ggplot(data=qq_gam_resid_3, aes(x=x, y=y))+geom_point()+theme_bw()+ylab("Sample Quantiles")+xlab("Theoretical Quantiles")+ geom_abline(intercept = mean(qq_gam_resid_3$y), slope = sd(qq_gam_resid_3$y))
-# dev.off()
-# 
-# pdf("qq_lm_2.pdf", width=pdf_width, height=pdf_height)
-# ggplot(data=qq_lm_resid_2, aes(x=x, y=y))+geom_point()+theme_bw()+ylab("Sample Quantiles")+xlab("Theoretical Quantiles")+ geom_abline(intercept = mean(qq_lm_resid_2$y), slope = sd(qq_lm_resid_2$y))
-# dev.off()
-# 
-# pdf("qq_lm_3.pdf", width=pdf_width, height=pdf_height)
-# ggplot(data=qq_lm_resid_3, aes(x=x, y=y))+geom_point()+theme_bw()+ylab("Sample Quantiles")+xlab("Theoretical Quantiles")+ geom_abline(intercept = mean(qq_lm_resid_3$y), slope = sd(qq_lm_resid_3$y))
-# dev.off()
-# 
-# # Density
-# pdf("density_raw.pdf", width=pdf_width, height=pdf_height)
-# ggplot(data=raw_jp, aes(x=x)) + geom_density(alpha=0.3, fill="black")+theme_bw()+xlab("Basal area increment (mm2)")+ylab("Density")
-# dev.off()
-# 
-# foo <- data.frame ("Raw"=log_jp, "GAM-2"=resid_gam_jp_2, "GAM-3"=resid_gam_jp_3, "LM-2"=resid_lm_jp_2, "LM-3"=resid_lm_jp_3)
-# names (foo) <- c("Raw", "GAM-2", "GAM-3", "LM-2", "LM-3")
-# foo <- data.frame(x=unlist(foo), Model=rep(names(foo), each=nrow(foo)))
-# 
-# pdf("density_all.pdf", width=pdf_width, height=pdf_height)
-# ggplot(data=foo, aes(x=x, fill=Model)) + geom_density(alpha=0.3)+theme_bw()+xlab("Log Basal area increment (mm2)")+geom_vline(x=0)+ylab("Density") + scale_fill_manual(values=c("blue4", "firebrick4", "deepskyblue",  "indianred1", "black"))
-# dev.off()
-# 
-# bar <- data.frame ("Raw"=log_jp, "GAM-2"=resid_gam_jp_2, "GAM-3"=resid_gam_jp_3)
-# names (bar) <- c("Raw", "GAM-2", "GAM-3")
-# bar <- data.frame(x=unlist(bar), Model=rep(names(bar), each=nrow(bar)))
-# 
-# pdf("density_gam.pdf", width=pdf_width, height=pdf_height)
-# ggplot(data=bar, aes(x=x, fill=Model)) + geom_density(alpha=0.3)+theme_bw()+xlab("Log Basal area increment (mm2)")+geom_vline(x=0)+ylab("Density") + scale_fill_manual(values=c("firebrick4", "deepskyblue", "black"))
-# dev.off()
+ggplot(melt(cor_I), aes(x=Var1, y=Var2, fill=value)) + geom_tile() + scale_fill_gradient(low="red", high="blue")
 
-# Reset working directory
-# setwd(main_wd)
+ggplot(melt(cor_T), aes(x=Var1, y=Var2, fill=value)) + geom_tile()
+
+ggplot(melt(cor_A), aes(x=Var1, y=Var2, fill=value)) + geom_tile()
 
 # Carbon-13 analysis ####
-raw_deltaC_Wood <- read.csv("C:/Users/Homeuser/Desktop/Documents/Research/TreeRingArrays/Data/tree_13c.csv")
-raw_deltaC_Wood <- c13[1:3]
+raw_deltaC_Wood <- read.csv("./Data/tree_13c.csv")
 
-Ca <- read.csv("C:/Users/Homeuser/Desktop/Documents/Research/TreeRingArrays/Data/co2_record.csv")
-Ca <- Ca[-3]
-rownames(Ca) <- Ca[[1]]
-Ca <- Ca[-1]
-Ca <- data.frame(Ca=Ca[as.numeric(rownames(Ca))<=2010 & as.numeric(rownames(Ca))>=1877,])
-rownames(Ca) <- 1877:2010
+Ca <- read.csv("./Data/co2_record.csv")
+Ca <- Ca[Ca$Year >= 1877 & Ca$Year <= 2010, -3]
+rownames(Ca) <- Ca$Year
 
-deltaC_Atm <- read.csv("C:/Users/Homeuser/Desktop/Documents/Research/TreeRingArrays/Data/13C_record.csv")
+deltaC_Atm <- read.csv("./Data/13C_record.csv")
 rownames(deltaC_Atm) <- deltaC_Atm[[1]]
 deltaC_Atm <- deltaC_Atm[-1]
 deltaC_Atm <- data.frame(DC=deltaC_Atm[as.numeric(rownames(deltaC_Atm))<=2010 & as.numeric(rownames(deltaC_Atm))>=1877,])
 rownames(deltaC_Atm) <- 1877:2010
 
 # # Convert format to a tree ring table
-deltaC_Wood <-  dcast(raw_deltaC_Wood, Year~Site, mean)
+deltaC_Wood <-  dcast(raw_deltaC_Wood, Year~Site, value.var="X.13C.Wood", mean)
 deltaC_Wood[sapply(deltaC_Wood, is.nan)] <- NA
-rownames(deltaC_Wood) <- deltaC_Wood[[1]]
+rownames(deltaC_Wood) <- deltaC_Wood$Year
 deltaC_Wood <- deltaC_Wood[-1]
 
 # Convert to DeltaC
@@ -276,165 +211,226 @@ DeltaC <- (deltaC_Atm[[1]]-deltaC_Wood)/(1000+deltaC_Wood)*1000
 # Convert to iWUE
 a <- 4.4
 b <- 27
-Wi <- Ca[[1]]/1.6*(1-(DeltaC-a)/(b-a))
+Wi <- Ca[[2]]/1.6*(1-(DeltaC-a)/(b-a))
 
-# Run Factor Regression Standardization
-# Span of 0.135
-Wi_frs <- standardize_frs(rwl.to.tra(Wi), model_type="gam")
+# Standardize iWUE data to extract time signal
+Wi_fes <- standardize_tra(rwl.to.stra(Wi), model=list(I=TRUE, T=TRUE, A=TRUE), method="gam")
+print(Wi_fes$fit[3:13])
 
-# Rescale CV so F is dominant
-Q_Wi <- Wi_frs$cv[[1]]
-F_Wi <- Wi_frs$cv[[2]]*geomMean(Wi_frs$cv[[3]])
-A_Wi <- Wi_frs$cv[[3]]/geomMean(Wi_frs$cv[[3]])
+# Compare to previous approach
+Wi_mean <- standardize_tra(rwl.to.stra(Wi), model=list(I=FALSE, T=TRUE, A=FALSE), method="rcs")
+print(Wi_mean$fit[3:13])
+
+# Compare fit 
+Wi_fit <- data.frame(ITA=unlist(Wi_fes$fit[3:13]), T=unlist(Wi_mean$fit[3:13]))
+
+# Rescale effects so T is dominant
+I_Wi <- Wi_fes$effects$I
+T_Wi <- Wi_fes$effects$T*geomMean(Wi_fes$effects$A)
+A_Wi <- Wi_fes$effects$A/geomMean(Wi_fes$effects$A)
+
+
+# Histogram of I
+Wi_I_hist <- ggplot(melt(I_Wi), aes(x=value)) + geom_density(fill="black")+theme_bw()+xlab("Individual effect (I) for iWUE") + ylab("Density")  + scale_x_log10(breaks=c(0.25, 0.5, 1, 2, 4), lim=c(0.25, 4)) + geom_vline(x=1)
+
+# Plot T
+Wi_T_plot <- ggplot(melt(data.frame(Year=as.numeric(names(T_Wi)),ITA=T_Wi, T=Wi_mean$effects$T*geomMean(Wi_mean$effects$A)), id.var="Year"), aes(x=Year, y=value)) + geom_line()+ facet_grid(variable~.)+theme_bw()+xlab("Year") + ylab("Time effect (T) for iWUE") +geom_hline(y=1) + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000))
+
+# Plot A
+Wi_A_plot <- ggplot(melt(A_Wi), aes(x=as.numeric((names(A_Wi))), y=value)) + geom_line()+theme_bw()+xlab("Age") + ylab("Age effect (A) for iWUE")
 
 # Find climate-growth links ####
 # Preprocess forcing info from tree rings
-forcing_QFA <- F_jp[1][as.numeric(rownames(F_jp))<=2007 & as.numeric(rownames(F_jp))>=1901,]
-forcing_FA <- F_jp[2][as.numeric(rownames(F_jp))<=2007 & as.numeric(rownames(F_jp))>=1901,]
-names(forcing_QFA) <- 1901:2007
-names(forcing_FA) <- 1901:2007
+time_ITA <- T_jp$ITA[as.numeric(rownames(T_jp))<=2007 & as.numeric(rownames(T_jp))>=1901]
+time_IT <- T_jp$IT[as.numeric(rownames(T_jp))<=2007 & as.numeric(rownames(T_jp))>=1901]
+time_TA <- T_jp$TA[as.numeric(rownames(T_jp))<=2007 & as.numeric(rownames(T_jp))>=1901]
+time_T <- T_jp$T[as.numeric(rownames(T_jp))<=2007 & as.numeric(rownames(T_jp))>=1901]
+
+names(time_ITA) <- 1901:2007
+names(time_IT) <- 1901:2007
+names(time_TA) <- 1901:2007
+names(time_T) <- 1901:2007
 
 # Load climate data
-jp.clim <- read.csv("C:/Users/Homeuser/Desktop/Documents/Research/TreeRingArrays/Data/IgnaceClimate.csv")
+jp.clim <- read.csv("./Data/IgnaceClimate.csv")
 foo <- melt(jp.clim, id.vars=c("Month", "Year"))
-jp.clim.wide <- recast(foo, Year~variable+Month) 
-full_clim <- as.data.frame(read.csv("C:/Users/Homeuser/Desktop/Documents/Research/TreeRingArrays/Data/full_clim.csv", header=T))
+jp.clim.wide <- dcast(foo, Year~variable+Month) 
+full_clim <- as.data.frame(read.csv("./Data/full_clim.csv", header=T))
 rownames(full_clim) <- full_clim[[1]]
 full_clim <- full_clim[-1:-5]
 
-# Preliminary investigations into good candidate  variables
-detach (package:gam)
-library(mgcv)
+# Basic climate correlations and response ####
+library(bootRes)
 
-clim_fit <- vector()
-for (var in 1:ncol(full_clim)){
-  clim_var <- full_clim[[var]]
-  try(prelim_gam <- gam(forcing_QFA~s(clim_var)))
-  clim_fit <- c(clim_fit, summary(prelim_gam)$r.sq)
-}
-names(clim_fit) <- names(full_clim)
-clim_fit <- sort(clim_fit, decreasing=T)
+# Computing responses
+resp_ITA <- dcc(data.frame(chron=time_ITA, samp.depth=jp.depth.T[30:136]), jp.clim, method="r", start=2, end=10)
+resp_IT <- dcc(data.frame(chron=time_IT, samp.depth=jp.depth.T[30:136]), jp.clim, method="r", start=2, end=10)
+resp_TA <- dcc(data.frame(chron=time_TA, samp.depth=jp.depth.T[30:136]), jp.clim, method="r", start=2, end=10)
+resp_T <- dcc(data.frame(chron=time_T, samp.depth=jp.depth.T[30:136]), jp.clim, method="r", start=2, end=10)
 
-# Prelim variables, R^2 > 0.1:
-# 1, 9, 10, 11, 12, 15, 19, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36, 37, 38, 66, 67, 68, 77
-
-library(vegan)
-# Ignore snow data, limited history and unreliable
-clim_prelim <- full_clim[c(1, 9, 10, 11, 12, 15, 19, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36, 37, 38)]
-
-for (var in colnames(clim_prelim)){
-  clim_var <- full_clim[[var]]
-  try(prelim_gam <- gam(forcing_QFA~s(clim_var)))
-  plot(prelim_gam, xlab=var)
+# Cleaning responses
+annotate_response <- function(dcc_out, id)
+{
+  split_code <- strsplit(rownames(dcc_out), split=".curr.")
+  dcc_out$var <- sapply(split_code, function(x){x[1]})
+  dcc_out$month <- sapply(split_code, function(x){x[2]})
+  dcc_out$id <- id
+  
+  return(dcc_out)
 }
 
-# Precipitation data clusters
-biplot(princomp(prelim_clim))
-arm::corrplot(prelim_clim)
-plot(hclust(dist(t(prelim_clim))))
+resp_ITA <- annotate_response(resp_ITA, "ITA")
+resp_IT <- annotate_response(resp_IT, "IT")
+resp_TA <- annotate_response(resp_TA, "TA")
+resp_T <- annotate_response(resp_T, "T")
 
-# Relevant subset
-# iWUE // more of a mediating variable?
-# CO2 // is this better than WUE? spurious correlation?
-# Annual minimum temperature
-# Mean temperature of period 3
-# Total precipitation for period 3
-# Number.of.days.of.growing.season
+resp_all <- rbind(resp_ITA, resp_IT, resp_TA, resp_T)
+resp_all$month[resp_all$month=="apr"] <- "April"
+resp_all$month[resp_all$month=="aug"] <- "August"
+resp_all$month[resp_all$month=="dec"] <- "December"
+resp_all$month[resp_all$month=="feb"] <- "February"
+resp_all$month[resp_all$month=="jan"] <- "January"
+resp_all$month[resp_all$month=="jul"] <- "July"
+resp_all$month[resp_all$month=="jun"] <- "June"
+resp_all$month[resp_all$month=="mar"] <- "March"
+resp_all$month[resp_all$month=="may"] <- "May"
+resp_all$month[resp_all$month=="nov"] <- "November"
+resp_all$month[resp_all$month=="oct"] <- "October"
+resp_all$month[resp_all$month=="sep"] <- "September"
 
-# GAM models on hypothesized relations
+resp_all$month <- factor(resp_all$month, unique(resp_all$month))
+resp_all$id <- factor(resp_all$id, unique(resp_all$id))
+resp_all$var <- factor(resp_all$var, unique(resp_all$var))
+
+# Plotting
+response_plot <- ggplot(resp_all, aes(x=id, y=coef, fill=id)) + geom_bar(stat="identity") + facet_grid(month~var) + theme_bw() + xlab("Standardization model") + ylab("Standardized growth-climate response") + geom_hline(y=0) + geom_linerange(aes(ymin=ci.lower, ymax=ci.upper)) + scale_fill_manual(values=c("darkorchid3", "red", "blue", "grey40")) + guides(fill=FALSE)
+
+# GAM and linear models on prelim relations ####
+
+# Summer drought: June max temp
+# Winter prec.: February + March prec
+# Summer prec
+# Growing season length
+# Growing season GDD
+# CO2
+# WUE
 
 # Compiling relevant independent variables
-sel_clim <- full_clim[c("Annual.minimum.temperature", "gdd.above.base_temp.for.period.3", "Total.precipitation.for.period.3","Number.of.days.of.growing.season")]
-names(sel_clim) <- c("annual_min", "growing_season_GDD", "growing_season_prec", "growing_season_length")
-sel_clim$WUE <- F_Wi[as.numeric(names(F_Wi))<=2007 & as.numeric(names(F_Wi))>=1901]
-sel_clim$CO2 <- Ca[as.numeric(rownames(Ca))<=2007 & as.numeric(rownames(Ca))>=1901,]
-sel_clim$sWUE <- sel_clim$WUE/sel_clim$CO2
-
-# Experiment with simple detrending
-# library(pracma)
-# 
-# forcing_QFA <- pracma::detrend(forcing_QFA)[,1]
-# forcing_FA <- pracma::detrend(forcing_FA)[,1]
-
+sel_clim <- full_clim[c("gdd.above.base_temp.for.period.3", "Total.precipitation.for.period.3","Number.of.days.of.growing.season", "June.mean.monthly.maximum.temperature")]
+names(sel_clim) <- c("GDD", "summer_prec", "growing_season_length", "june_max")
+sel_clim$winter_prec <- full_clim$February.mean.monthly.precipitation + full_clim$March.mean.monthly.precipitation
+sel_clim$WUE <- T_Wi[as.numeric(names(T_Wi))<=2007 & as.numeric(names(T_Wi))>=1901]
+sel_clim$CO2 <- Ca[as.numeric(rownames(Ca))<=2007 & as.numeric(rownames(Ca))>=1901, 2]
 
 # Run the models
-clim_model_QFA <- gam(log(forcing_QFA)~
+clim_model_ITA <- gam(log(time_ITA)~
+     s(sel_clim[["WUE"]])+
+#    s(sel_clim[["CO2"]])+
+     s(sel_clim[["GDD"]])+
+     s(sel_clim[["june_max"]])+                                    
+     s(sel_clim[["summer_prec"]])+
+     s(sel_clim[["winter_prec"]])+                  
+     s(sel_clim[["growing_season_length"]]))
+
+clim_model_IT <- gam(log(time_IT)~
+     s(sel_clim[["WUE"]])+
+#    s(sel_clim[["CO2"]])+
+     s(sel_clim[["GDD"]])+
+     s(sel_clim[["june_max"]])+                                    
+     s(sel_clim[["summer_prec"]])+
+     s(sel_clim[["winter_prec"]])+                  
+     s(sel_clim[["growing_season_length"]]))
+
+clim_model_TA <- gam(log(time_TA)~
+     s(sel_clim[["WUE"]])+
+#    s(sel_clim[["CO2"]])+
+     s(sel_clim[["GDD"]])+
+     s(sel_clim[["june_max"]])+                                    
+     s(sel_clim[["summer_prec"]])+
+     s(sel_clim[["winter_prec"]])+                  
+     s(sel_clim[["growing_season_length"]]))
+
+clim_model_T <- gam(log(time_T)~
       s(sel_clim[["WUE"]])+
-#       s(sel_clim[["CO2"]])+
-#       s(forcing_QFA_l1)+               
-#       s(sel_clim[["annual_min"]])+
-      s(sel_clim[["growing_season_GDD"]])+
-      s(sel_clim[["growing_season_prec"]])+
+#     s(sel_clim[["CO2"]])+
+      s(sel_clim[["GDD"]])+
+      s(sel_clim[["june_max"]])+                                    
+      s(sel_clim[["summer_prec"]])+
+      s(sel_clim[["winter_prec"]])+                  
       s(sel_clim[["growing_season_length"]]))
 
-clim_model_FA <- gam(log(forcing_FA)~
-      s(sel_clim[["WUE"]])+
-#       s(sel_clim[["CO2"]])+
-#       s(forcing_QFA_l1)+               
-#       s(sel_clim[["annual_min"]])+
-      s(sel_clim[["growing_season_GDD"]])+
-      s(sel_clim[["growing_season_prec"]])+
-      s(sel_clim[["growing_season_length"]]))
-
-clim_model_lin_QFA <- lm(log(forcing_QFA)~
-     (sel_clim[["WUE"]])+
-#      (sel_clim[["CO2"]])+
-#      (forcing_QFA_l1)+               
-#      (sel_clim[["annual_min"]])+
-     (sel_clim[["growing_season_GDD"]])+
-     (sel_clim[["growing_season_prec"]])+
-     (sel_clim[["growing_season_length"]]))
-
-clim_model_lin_FA <- gam(log(forcing_FA)~
+clim_model_lin_ITA <- lm(log(time_ITA)~
       (sel_clim[["WUE"]])+
-#       (sel_clim[["CO2"]])+
-#       (forcing_QFA_l1)+               
-#       (sel_clim[["annual_min"]])+
-      (sel_clim[["growing_season_GDD"]])+
-      (sel_clim[["growing_season_prec"]])+
+#     (sel_clim[["CO2"]])+
+      (sel_clim[["GDD"]])+
+      (sel_clim[["june_max"]])+                                    
+      (sel_clim[["summer_prec"]])+
+      (sel_clim[["winter_prec"]])+                  
       (sel_clim[["growing_season_length"]]))
 
-summary(clim_model_QFA)
-summary(clim_model_FA)
+clim_model_lin_IT <- lm(log(time_IT)~
+      (sel_clim[["WUE"]])+
+#     (sel_clim[["CO2"]])+
+      (sel_clim[["GDD"]])+
+      (sel_clim[["june_max"]])+                                    
+      (sel_clim[["summer_prec"]])+
+      (sel_clim[["winter_prec"]])+                  
+      (sel_clim[["growing_season_length"]]))
 
-summary (clim_model_lin_QFA)
-summary (clim_model_lin_FA)
+clim_model_lin_TA <- lm(log(time_TA)~
+      (sel_clim[["WUE"]])+
+#     (sel_clim[["CO2"]])+
+      (sel_clim[["GDD"]])+
+      (sel_clim[["june_max"]])+                                    
+      (sel_clim[["summer_prec"]])+
+      (sel_clim[["winter_prec"]])+                  
+      (sel_clim[["growing_season_length"]]))
 
+clim_model_lin_T  <- lm(log(time_T)~
+      (sel_clim[["WUE"]])+
+#     (sel_clim[["CO2"]])+
+      (sel_clim[["GDD"]])+
+      (sel_clim[["june_max"]])+                                    
+      (sel_clim[["summer_prec"]])+
+      (sel_clim[["winter_prec"]])+                  
+      (sel_clim[["growing_season_length"]]))
 
-plot(clim_model_QFA)
-plot(clim_model_FA)
+summary(clim_model_ITA)
+summary(clim_model_IT)
+summary(clim_model_TA)
+summary(clim_model_T)
 
-# # Modelling WUE and CO2 effects on growth
-# co2_growth_QFA <- gam(forcing_QFA~s(sel_clim[["CO2"]]))
-# co2_growth_FA <- gam(forcing_FA~s(sel_clim[["CO2"]]))
-# 
-# wue_growth_QFA <- gam(forcing_QFA~s(sel_clim[["WUE"]]))
-# wue_growth_FA <- gam(forcing_FA~s(sel_clim[["WUE"]]))
-# 
-# # Lagged dependent variables
-# forcing_QFA_l1 <- c(forcing_QFA[-1], NA)
-# forcing_FA_l1 <- c(forcing_FA[-1], NA)
-# 
-# lag_QFA <- gam(forcing_QFA~s(forcing_QFA_l1))
-# lag_FA <- gam(forcing_FA~s(forcing_FA_l1))
-# 
-# # Report results of experimentation
-# summary(co2_growth_QFA)$r.sq
-# summary(co2_growth_FA)$r.sq
-# 
-# summary(wue_growth_QFA)$r.sq
-# summary(wue_growth_FA)$r.sq
-# 
-# summary(lag_QFA)$r.sq
-# summary(lag_FA)$r.sq
+summary (clim_model_lin_ITA)
+summary (clim_model_lin_IT)
+summary (clim_model_lin_TA)
+summary (clim_model_lin_T)
 
-# Plotting ####
+# plot(clim_model_ITA)
+# plot(clim_model_IT)
+# plot(clim_model_TA)
+# plot(clim_model_T)
 
-predictors <- c("WUE", "growing_season_GDD", "growing_season_prec", "growing_season_length")
-predictor_names <- c("iWUE", "Growing season GDD", "Growing season precipitation (mm)", "Growing season length (days)")
-models <- list(clim_model_QFA, clim_model_FA, clim_model_lin_QFA, clim_model_lin_FA)
-model_names <- c("GAM_QFA", "GAM_FA", "LM_QFA", "LM_FA")
+Rsq_df <- data.frame(
+  ITA=c(summary(clim_model_ITA)$r.sq, summary(clim_model_lin_ITA)$r.sq),
+  IT=c(summary(clim_model_IT)$r.sq, summary(clim_model_lin_IT)$r.sq),
+  TA=c(summary(clim_model_TA)$r.sq, summary(clim_model_lin_TA)$r.sq),
+  T=c(summary(clim_model_T)$r.sq, summary(clim_model_lin_T)$r.sq) 
+)
 
+rownames(Rsq_df) <- c("gam", "lm")
+
+AIC_df <- data.frame(AIC=c(AIC(clim_model_ITA), AIC(clim_model_lin_ITA)), BIC=c(BIC(clim_model_ITA), BIC(clim_model_lin_ITA)))
+rownames(AIC_df) <- c("gam", "lm")
+
+AIC_df$AIC <- AIC_df$AIC - AIC_df$AIC[1]
+AIC_df$BIC <- AIC_df$BIC - AIC_df$BIC[1]
+
+# Plotting climate response analysis ####
+
+predictors <- c("WUE", "GDD", "june_max", "summer_prec", "winter_prec", "growing_season_length")
+predictor_names <- c("iWUE", "Growing season GDD", "June maximum temperature",  "Summer precipitation (mm)", "Winter precipitation (mm)", "Growing season length (days)")
+models <- list(clim_model_ITA, clim_model_lin_ITA)
+model_names <- c("GAM_ITA", "LM_ITA")
 
 partial_response <- data.frame("Model"=NA, "var"=NA, "x"=NA, "response"=NA, "se"=NA)[0,]
 for (i in 1:length(models)){
@@ -457,39 +453,128 @@ for (i in 1:length(models)){
   partial_response <- rbind(partial_response, partial_response_i)  
 }
 
-for (v in 1:length(predictors)){
-  df <- partial_response[partial_response$var==predictors[v],]
-  print(ggplot (data=df, aes(x=x, y=response, colour=Model, fill=Model, ymax = response + 1.96*se, ymin=response - 1.96*se))+geom_line(size=1.5)+labs(y="Partial predictions", x=predictor_names[v])+theme_bw()+geom_ribbon(alpha=0.1)+geom_ribbon(alpha=0.1)+geom_hline(y=0))
-}
+levels(partial_response$var) <- c("Growing season GDD", "Growing season length (days)", "June maximum temperature", "Summer precipitation (mm)", "Winter precipitation (mm)", "iWUE")
+
+partial_response$var <- factor(partial_response$var, levels(partial_response$var)[c(5,4,3,1,2,6)])
+
+# Plot partial predictions
+
+clim_model_plot <- ggplot (data=partial_response, aes(x=x, y=response, colour=Model, fill=Model, ymax = response + 1.96*se, ymin=response - 1.96*se))+geom_line(size=1.5)+labs(y="Standardized partial predictions", x="Predictor variable")+theme_bw()+geom_ribbon(alpha=0.1)+geom_hline(y=0) + facet_wrap(~var, scales="free_x", ncol=1) + ylim(c(-0.4, 0.4)) + theme(legend.position="top")
 
 # Plot the predictor variables vs. time
-for (v in predictors){
-  df <- data.frame(y=sel_clim[[v]], x=as.numeric(rownames(sel_clim)))
-  limits <- aes()
-  print(ggplot(data=df, aes(x=x, y=y)) + geom_line(size=1.5)+theme_bw() + xlab("Time") + ylab(predictor_names[which(predictors==v)]))
-}
+clim_df <- sel_clim
+names(clim_df) <- c("iWUE", "Growing season GDD", "June maximum temperature", "Summer precipitation (mm)", "Winter precipitation (mm)", "Growing season length (days)", "Ambient CO2 (ppm)")
+clim_df$Year <- as.numeric(rownames(sel_clim))
+clim_df <- melt(clim_df, id.vars="Year")
+clim_df$variable <- factor(clim_df$variable, levels(clim_df$variable)[c(5,4,3,2,6,1,7)])
+
+clim_patterns_plot <- ggplot(data=clim_df, aes(x=Year, y=value)) + geom_line(size=1.5)+theme_bw() + xlab("Time") + ylab("Predictor variable") + facet_wrap(~variable, scales="free_y", ncol=1)
 
 # Exploring WUE vs. climate links ####
 
-wue_clim_fit <- vector()
-for (var in 1:ncol(full_clim)){
-  clim_var <- full_clim[[var]]
-  try(prelim_gam <- gam(sel_clim$sWUE~s(clim_var)))
-  wue_clim_fit <- c(wue_clim_fit, summary(prelim_gam)$r.sq)
-}
-names(wue_clim_fit) <- names(full_clim)
-wue_clim_fit <- sort(wue_clim_fit, decreasing=T)
-print(wue_clim_fit)
+# First, we need to remove the CO2 signal
+# Saurer et al. 2004 says that Ci/Ca should be roughly constant
+# Carbon isotope discrimination indicates improving water-use efﬁciency of trees in northern Eurasia over the last 100 years
+# DeltaC = a + (b-a)Ci/Ca
+# Wi = Ca[[2]]/1.6*(1-(DeltaC-a)/(b-a))
+# Wi = Ca/1.6*(1-(a + (b-a)Ci/Ca-a)/(b-a))
+# Wi = Ca/1.6*(1-Ci/Ca)
+# Wi = Ca/1.6-Ci/1.6
+# Wi = (Ca-Ci)/1.6
+# Ci = Ca-1.6*Wi
 
-# Scaled WUE seems to be a mediating variable; indicates drought stress, declining as precipitation increasees
+# Wi = (1-B_Ca)*Ca + B_clim*Clim + noise
 
-clim_model_QFA <- gam(log(forcing_QFA)~
-                        s(sel_clim[["WUE"]])+
-                        #       s(sel_clim[["CO2"]])+
-                        #       s(forcing_QFA_l1)+               
-                        #       s(sel_clim[["annual_min"]])+
-                        s(sel_clim[["growing_season_GDD"]])+
-                        s(sel_clim[["growing_season_prec"]])+
-                        s(sel_clim[["growing_season_length"]]))
+Wi_Ca_model <- gam(1.6*WUE ~ CO2 + 0, data=sel_clim)
 
+Wi_lin_model <- gam(1.6*WUE 
+    ~ CO2 +
+    (sel_clim[["GDD"]])+
+    (sel_clim[["june_max"]])+                                    
+    (sel_clim[["summer_prec"]])+
+    (sel_clim[["winter_prec"]])+                  
+    (sel_clim[["growing_season_length"]])+
+    0, 
+    data=sel_clim)
 
+Wi_gam_model <- gam(1.6*WUE 
+    ~ CO2 +
+    s(sel_clim[["GDD"]])+
+    s(sel_clim[["june_max"]])+                                    
+    s(sel_clim[["summer_prec"]])+
+    s(sel_clim[["winter_prec"]])+                  
+    s(sel_clim[["growing_season_length"]])+
+    0, 
+    data=sel_clim)
+
+summary(Wi_Ca_model)
+summary(Wi_lin_model)
+summary(Wi_gam_model)
+
+# Saving results ####
+
+# Sample depth
+ggsave("./Figures/sample_depth.svg", sample_depth_plot, width=8.5, height=3)
+ggsave("./Figures/sample_depth.pdf", sample_depth_plot, width=8.5, height=3)
+
+# Standardization
+save(jp.gam.ITA, file="./Results/jp.gam.ITA.RData")
+save(jp.gam.ITA, file="./Results/jp.gam.IT.RData")
+save(jp.gam.TA, file="./Results/jp.gam.TA.RData")
+save(jp.gam.T, file="./Results/jp.gam.T.RData")
+
+write.csv(jp.fit, file="./Results/jp_fit.csv")
+
+ggsave("./Figures/I_vs_age.svg", I_vs_age_plot, width=8.5, height=3)
+ggsave("./Figures/I_vs_age.pdf", I_vs_age_plot, width=8.5, height=3)
+ggsave("./Figures/I_hist.svg", I_hist, width=8.5, height=3)
+ggsave("./Figures/I_hist.pdf", I_hist, width=8.5, height=3)
+ggsave("./Figures/T_plot.svg", T_plot, width=8.5, height=6)
+ggsave("./Figures/T_plot.pdf", T_plot, width=8.5, height=6)
+ggsave("./Figures/A_plot.svg", A_plot, width=8.5, height=3)
+ggsave("./Figures/A_plot.pdf", A_plot, width=8.5, height=3)
+
+save(I_age_corr, file="./Results/I_age_corr.RData")
+save(T_trend, file="./Results/T_trend.RData")
+save(A_trend, file="./Results/A_trend.RData")
+
+write.csv(cor_I, file="./Results/I_cor.csv")
+write.csv(cor_T, file="./Results/T_cor.csv")
+write.csv(cor_A, file="./Results/A_cor.csv")
+
+# WUE standardization
+write.csv(DeltaC, file="./Results/DeltaC.csv")
+write.csv(Wi, file="./Results/iWUE.csv")
+
+save(Wi_fes, file="./Results/Wi_fes.RData")
+save(Wi_mean, file="./Results/Wi_mean.RData")
+
+write.csv(Wi_fit, file="./Results/Wi_fit.csv")
+
+ggsave("./Figures/Wi_I_hist.svg", Wi_I_hist, width=8.5, height=3)
+ggsave("./Figures/Wi_I_hist.pdf", Wi_I_hist, width=8.5, height=3)
+ggsave("./Figures/Wi_T_plot.svg", Wi_T_plot, width=8.5, height=6)
+ggsave("./Figures/Wi_T_plot.pdf", Wi_T_plot, width=8.5, height=6)
+ggsave("./Figures/Wi_A_plot.svg", Wi_A_plot, width=8.5, height=3)
+ggsave("./Figures/Wi_A_plot.pdf", Wi_A_plot, width=8.5, height=3)
+
+# Linear bootstrapped response
+write.csv(resp_all, file="./Results/bootstrapped_clim_responses.csv")
+ggsave("./Figures/response_mega_plot.svg", response_plot, width=8.5, height=11)
+ggsave("./Figures/response_mega_plot.pdf",response_plot, width=8.5, height=11)
+
+# Climate patterns
+ggsave("./Figures/clim_patterns_plot.svg", clim_patterns_plot, width=5, height=11)
+ggsave("./Figures/clim_patterns_plot.pdf", clim_patterns_plot, width=5, height=11)
+
+# Climate response
+summ_clim_model_ITA <- summary(clim_model_ITA)
+summ_clim_model_lin_ITA <- summary(clim_model_lin_ITA)
+save(summ_clim_model_ITA, file="./Results/summ_clim_model_ITA.RData")
+save(summ_clim_model_lin_ITA, file="./Results/summ_clim_model_lin_ITA.RData")
+
+write.csv(Rsq_df, file="./Results/Rsq_clim_response_models.csv")
+write.csv(AIC_df, file="./Results/AIC_clim_response_models.csv")
+
+ggsave("./Figures/clim_model_plot.svg", clim_model_plot, width=5, height=11)
+ggsave("./Figures/clim_model_plot.pdf", clim_model_plot, width=5, height=11)

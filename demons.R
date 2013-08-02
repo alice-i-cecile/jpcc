@@ -101,7 +101,7 @@ estimate_demons <- function (corrupted_effects, tra, sparse=TRUE, form="multipli
 
 # Remove a demonic intrusion ####
 remove_demons <- function (m=1, corrupted_effects, tra, sparse=TRUE, form="multiplicative"){
-  ridge_ids <- demonic_ritual(effects, tra, sparse)
+  ridge_ids <- demonic_ritual(corrupted_effects, tra, sparse)
   
   effects <- corrupted_effects
   

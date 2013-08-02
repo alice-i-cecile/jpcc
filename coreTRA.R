@@ -7,7 +7,7 @@ grab_age <- function(i, tra, sparse=TRUE)
 {
   if (sparse)
   {
-    age <- max(tra[tra$i=="V1","a"])
+    age <- max(as.numeric(as.character(tra[tra$i==i,"a"])))
   } else{
     age_row <- min(which(!is.na(tra[i,,]), arr.ind=T)[[2]])
     age <- dimnames(tra)[[3]][age_row]
