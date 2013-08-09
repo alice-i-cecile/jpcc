@@ -10,7 +10,7 @@ source("demons.R")
 # method: which algorithm should we use to standardize the data?
 # sparse: use sparse list representation of data to reduce memory overhead
 
-standardize_tra <- function(tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="multiplicative", error="lnorm", method="sfs", sparse=TRUE, post_hoc=TRUE, ...)
+standardize_tra <- function(tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="multiplicative", error="lnorm", ci="support", ci_size=2, sparse=TRUE, method="sfs", post_hoc=TRUE, ...)
 {
   
   # Exception handling
@@ -39,27 +39,41 @@ standardize_tra <- function(tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="mult
     warning("Model form and error distribution are an unrealistic match. Be sure to check the model residuals. Model fitting problems may arise.")
   }
 
+  # Convert the tree-ring array to the appropriate form (sparse/full)
+  if (sparse)
+  {
+    if (!is.data.frame(tra))
+    {
+      tra <- sparse_tra(tra)
+    }
+  } else
+  {
+    if (is.data.frame(tra))
+    {
+      tra <- unsparse_tra(tra)
+    }
+  }
  
   if (method=="likelihood")
   {
-    out <- standardize_likelihood(tra, model, form, error, sparse, ...)
+    out <- standardize_likelihood(tra, model, form, error, ci, ci_size, sparse, ...)
   }
   else if(method == "least_squares")
   {
-    out <- standardize_least_squares(tra, model, form, error, sparse, ...)
+    out <- standardize_least_squares(tra, model, form, error, ci, ci_size, sparse, ...)
   }
   else if(method == "sfs")
   {
-    #out <- standardize_sfs(tra, model, form, error, sparse, ...)
-    out <- standardize_tsfs(tra, model, form, error, sparse, ...)
+    #out <- standardize_sfs(tra, model, form, error, ci, ci_size, sparse, ...)
+    out <- standardize_tsfs(tra, model, form, error, ci, ci_size, sparse, ...)
   }
   else if(method == "rcs")
   {
-    out <- standardize_rcs(tra, model, form, error, sparse, ...)
+    out <- standardize_rcs(tra, model, form, error, ci, ci_size, sparse, ...)
   }
   else if(method == "gam")
   {
-    out <- standardize_gam(tra, model, form, error, sparse, ...)
+    out <- standardize_gam(tra, model, form, error, ci, ci_size, sparse, ...)
   }
   
   # Check for 3 effect model
@@ -69,6 +83,10 @@ standardize_tra <- function(tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="mult
     {
       out$effects <- post_hoc_intercession(out$effects, out$tra, sparse, form)
       warning("Three effect model selected. Post-hoc selection was used to stabilize parameter estimates.")
+      
+      # Recompute intervals after the tweaking
+      out$intervals <- intervals_tra(effects, tra, model, form, error,ci, ci_size, sparse)
+      
     } else {
       warning("Three effect model selected. Parameter estimates are wildly unreliable. Consider using post-hoc selection.")
     }
@@ -678,9 +696,188 @@ BIC_tra <- function (llh, k, n)
   return(BIC)
 }
 
+# Generating confidence / support / credible intervals ####
+intervals_tra <- function(effects, tra, model, form, error, ci, ci_size, sparse)
+{
+  # Other intervals NYI
+  if (ci!="support"){
+    return (NA)
+  } 
+  
+  # Compute baseline residuals
+  base_predicted <- predicted_tra(effects, tra, form, sparse)
+  base_residuals <- residuals_tra(tra, base_predicted, error, sparse)
+  #base_llh <- llh_tra(base_residuals, error, sparse)
+  
+  # Search for values of the effect element such that LLH is ci_size less than the "optimized" value
+  find_support_limit <- function(index, effect_name, side){
+    
+    # objective function to minimize
+    # Find new_value such that the difference in likelihoods == ci_size
+    support_objective <- function (new_value){
+      # Simple but very slow 
+      # Function to compute marginal LLH
+      #tweak_llh <- function (new_value, index, effect_name){      
+      #  tweaked_effects <- effects
+      #  tweaked_effects[[effect_name]][index] <- new_value
+        
+      #  tweaked_predicted <- predicted_tra(effects, tra, form, sparse)
+      #  tweaked_residuals <- residuals_tra(tra, base_predicted, error, sparse)
+      #  tweaked_llh <- llh_tra(tweaked_residuals, error, sparse)
+        
+      #  return (tweaked_llh)
+      #}
+      
+      # tweaked_llh <- tweak_llh(new_value, index, effect_name)  
+      # objective <- (base_llh - tweaked_llh - ci_size)^2
+      
+      # Faster approach
+      # Only a small subset of the residuals changes each time
+      # Compute the change in LLH for this subset only instead
+      # Overall change will be the same!
+      old_value <- effects[[effect_name]][index]
+      
+      # Compute delta LLH
+      find_tweaked_llh <- function (new_value){
+        if (sparse){
+          index_name <- names(effects[[effect_name]][index])
+          affected_residuals <- base_residuals[base_residuals[[tolower(effect_name)]]==index_name,]
+          base_llh_affected <- llh_tra(affected_residuals, error, sparse)
+          
+          tweaked_residuals <- affected_residuals
+          
+          if (form == "multiplicative"){
+            tweaked_residuals$G <- affected_residuals$G / old_value * new_value
+          } else {
+            tweaked_residuals$G <- affected_residuals$G - old_value + new_value
+          }
+          
+          tweaked_llh_affected <- llh_tra(tweaked_residuals, error, sparse)
+          
+        } else {
+          if (effect_name=="I"){
+            affected_residuals <- base_residuals[index,,]                   
+          } else if (effect_name=="T") {
+            affected_residuals <- base_residuals[,index,]
+          } else if (effect_name=="A") {
+            affected_residuals <- base_residuals[,,index]
+          }
+          base_llh_affected <- llh_tra(affected_residuals, error, sparse)
+          tweaked_residuals <- affected_residuals
+          
+          if (form == "multiplicative"){
+            tweaked_residuals <- affected_residuals*new_value / old_value
+          } else {
+            tweaked_residuals <- affected_residuals + new_value - old_value          
+          }
+          tweaked_llh_affected <- llh_tra(tweaked_residuals, error, sparse)
+        }
+      }
+      
+      tweaked_llh_affected <- find_tweaked_llh(new_value)
+      
+      objective <- (base_llh_affected - tweaked_llh_affected - ci_size)^2
+      
+      return (objective)
+    }
+    
+    # Ensure reasonable bounds
+    old_value <- effects[[effect_name]][index]
+    scale <- max(abs(effects[[effect_name]]))
+    safety_margin <- 1000
+    
+    if (side=="upper"){
+      # Look above the existing effect if we want to find an upper support limit
+      support_limit <- optimize(support_objective, interval=c(old_value, old_value + 1000*scale))$minimum
+    } else {
+      # Look below the existing effect if we want to find an lower support limit
+      support_limit <- optimize(support_objective, interval=c(old_value - 1000*scale, old_value))$minimum
+    }
+    
+    return (support_limit)
+  }
+  
+  # Setting up structure for storage
+  intervals <- list()
+  intervals$upper <- effects
+  intervals$lower <- effects
+  
+  inc_effects <- names(which(model==TRUE))
+  
+  # Iterate over upper and lower support intervals
+  for (side in c("upper", "lower"))
+  {
+    # Iterate through the effects
+    for (effect_name in inc_effects)
+    {
+      # Iterate through the indexes
+      for (index in 1:length(effects[[effect_name]]))
+      {
+       print (paste(side, effect_name, index))
+       intervals[[side]][[effect_name]][index] <- find_support_limit(index, effect_name, side)
+      } 
+    }
+  }
+  
+ return (intervals)  
+}
+
+marginal_likelihood_profile <- function(effect_name, index, scale=1, effects, tra, model, form, error, sparse)
+{
+  old_value <- effects[[effect_name]][index]
+  
+  resolution <- 101
+  profile <- data.frame(x=seq(from=old_value-scale/2, to=old_value+scale/2, length.out=resolution))  
+  
+  # Compute delta LLH
+  relative_llh <- function (new_value){
+    if (sparse){
+      index_name <- names(effects[[effect_name]][index])
+      affected_residuals <- base_residuals[base_residuals[[tolower(effect_name)]]==index_name,]
+      base_llh_affected <- llh_tra(affected_residuals, error, sparse)
+      
+      tweaked_residuals <- affected_residuals
+      
+      if (form == "multiplicative"){
+        tweaked_residuals$G <- affected_residuals$G / old_value * new_value
+      } else {
+        tweaked_residuals$G <- affected_residuals$G - old_value + new_value
+      }
+      
+      tweaked_llh_affected <- llh_tra(tweaked_residuals, error, sparse)
+      
+    } else {
+      if (effect_name=="I"){
+        affected_residuals <- base_residuals[index,,]                   
+      } else if (effect_name=="T") {
+        affected_residuals <- base_residuals[,index,]
+      } else if (effect_name=="A") {
+        affected_residuals <- base_residuals[,,index]
+      }
+      base_llh_affected <- llh_tra(affected_residuals, error, sparse)
+      tweaked_residuals <- affected_residuals
+      
+      if (form == "multiplicative"){
+        tweaked_residuals <- affected_residuals*new_value / old_value
+      } else {
+        tweaked_residuals <- affected_residuals + new_value - old_value          
+      }
+      tweaked_llh_affected <- llh_tra(tweaked_residuals, error, sparse)
+    }
+  }
+  
+  profile$rel_llh <- sapply(profile$x, relative_llh)
+  
+  upper <- 
+  
+  ggplot(profile, aes(x=x, y=rel_llh)) + geom_line() + geom_vline (x=old_value)
+  
+  return (profile)
+  
+}
 # Regional curve standardization ####
 # effect_order: the order in which effects are sequentially estimated
-standardize_rcs <- function(tra, model=list(I=FALSE, A=TRUE, T=TRUE), form="multiplicative", error="lnorm", sparse=TRUE)
+standardize_rcs <- function(tra, model=list(I=FALSE, A=TRUE, T=TRUE), form="multiplicative", error="lnorm", ci="support", ci_size=2, sparse=TRUE)
 {
   
   # Convert the tree-ring array to the appropriate form (sparse/full)
@@ -736,17 +933,20 @@ standardize_rcs <- function(tra, model=list(I=FALSE, A=TRUE, T=TRUE), form="mult
   
   # Compute model fit statistics
   fit <- model_fit_tra (effects, tra, model, form, error, sparse)
-    
-  # Record model fitting settings
-  settings <- list(model=model, form=form, error=error, sparse=sparse, method="rcs")
   
-  out <- list(effects=effects, tra=tra, fit=fit, settings=settings)
+  # Generate support intervals
+  intervals <- intervals_tra(effects, tra, model, form, error, ci, ci_size, sparse)
+  
+  # Record model fitting settings
+  settings <- list(model=model, form=form, error=error, sparse=sparse, method="rcs", ci=ci, ci_size=ci_size)
+  
+  out <-list(effects=effects, intervals=intervals, tra=tra, fit=fit, settings=settings)
   
   return (out)   
 }
 
 # Signal-free regional curve standardization ####
-standardize_sfs <-function (tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="multiplicative", error="lnorm", sparse=TRUE, cor_threshold=0.999999)
+standardize_sfs <-function (tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="multiplicative", error="lnorm", ci="support", ci_size=2, sparse=TRUE, cor_threshold=0.999999)
 {
   # Convert the tree-ring array to the appropriate form (sparse/full)
   if (sparse)
@@ -859,10 +1059,13 @@ standardize_sfs <-function (tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="mult
   # Compute model fit statistics
   fit <- model_fit_tra (effects, tra, model, form, error, sparse)
   
-  # Record model fitting settings
-  settings <- list(model=model, form=form, error=error, sparse=sparse, method="old_sfs")
+  # Generate support intervals
+  intervals <- intervals_tra(effects, tra, model, form, error, ci, ci_size, sparse)
   
-  out <- list(effects=effects, tra=tra, fit=fit, settings=settings)
+  # Record model fitting settings
+  settings <- list(model=model, form=form, error=error, sparse=sparse, method="old_sfs", , ci=ci, ci_size=ci_size)
+  
+  out <- list(effects=effects, intervals=intervals, tra=tra, fit=fit, settings=settings)
   
   return (out)
 }
@@ -870,7 +1073,7 @@ standardize_sfs <-function (tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="mult
 # Truly signal-free regional curve standardization ####
 # Cleans up SF-RCS algorithm and allows expansion to N dimensions
 
-standardize_tsfs <- function (tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="multiplicative", error="lnorm", sparse=TRUE, cor_threshold=0.999999)
+standardize_tsfs <- function (tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="multiplicative", error="lnorm", ci="support", ci_size=2, sparse=TRUE, cor_threshold=0.999999)
 {
   
   # Convert the tree-ring array to the appropriate form (sparse/full)
@@ -1002,10 +1205,13 @@ standardize_tsfs <- function (tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="mu
   # Compute model fit statistics
   fit <- model_fit_tra (effects, tra, model, form, error, sparse)
   
-  # Record model fitting settings
-  settings <- list(model=model, form=form, error=error, sparse=sparse, method="sfs")
+  # Generate support intervals
+  intervals <- intervals_tra(effects, tra, model, form, error, ci, ci_size, sparse)
   
-  out <- list(effects=effects, tra=tra, fit=fit, settings=settings)
+  # Record model fitting settings
+  settings <- list(model=model, form=form, error=error, sparse=sparse, method="sfs", ci=ci, ci_size=ci_size)
+  
+  out <- list(effects=effects, intervals=intervals, tra=tra, fit=fit, settings=settings)
   
   return (out)
 }
@@ -1054,7 +1260,7 @@ unflatten_effects <- function (flat_effects)
   return(effects)
 }
 
-standardize_mle <- function(tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="multiplicative", error="lnorm", sparse=TRUE, ...)
+standardize_mle <- function(tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="multiplicative", error="lnorm",  ci="support", ci_size=2, sparse=TRUE, ...)
 {
   # Convert the tree-ring array to the appropriate form (sparse/full)
   if (sparse) 
@@ -1118,10 +1324,13 @@ standardize_mle <- function(tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="mult
   # Compute model fit statistics
   fit <- model_fit_tra (effects, tra, model, form, error, sparse)
   
-  # Record model fitting settings
-  settings <- list(model=model, form=form, error=error, sparse=sparse, method="likelihood", ...)
+  # Generate support intervals
+  intervals <- intervals_tra(effects, tra, model, form, error, ci, ci_size, sparse)
   
-  out <- list(effects=effects, tra=tra, fit=fit, settings=settings)
+  # Record model fitting settings
+  settings <- list(model=model, form=form, error=error, sparse=sparse, method="likelihood", , ci=ci, ci_size=ci_size, ...)
+  
+  out <- list(effects=effects, intervals=intervals, tra=tra, fit=fit, settings=settings)
   
   return(out)
 }
@@ -1129,7 +1338,7 @@ standardize_mle <- function(tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="mult
 # GAM fixed effects standardization ####
 
 # Main gam function
-standardize_gam <- function (tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="multiplicative", error="lnorm", sparse=TRUE, age_k=10, ...)
+standardize_gam <- function (tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="multiplicative", error="lnorm", ci="support", ci_size=2, sparse=TRUE, age_k=10, ...)
 {
   # Confirm that form and error match, otherwise GAMs can't be used
   if (
@@ -1217,10 +1426,13 @@ standardize_gam <- function (tra, model=list(I=FALSE, T=TRUE, A=TRUE), form="mul
   fit <- model_fit_tra (effects, tra, model, form, error, sparse, method="gam", k=k)
   print("Fit computed.")
   
-  # Record model fitting settings
-  settings <- list(model=model, form=form, error=error, sparse=sparse, method="gam", ...) #max_k=max_k, ...)
+  # Generate support intervals
+  intervals <- intervals_tra(effects, tra, model, form, error, ci, ci_size, sparse)
   
-  out <- list(effects=effects, tra=tra, fit=fit, settings=settings)
+  # Record model fitting settings
+  settings <- list(model=model, form=form, error=error, sparse=sparse, method="gam", ci=ci, ci_size=ci_size, age_k=age_k, ...)
+  
+  out <- list(effects=effects, intervals=intervals, tra=tra, fit=fit, settings=settings)
   
   return (out)
   
