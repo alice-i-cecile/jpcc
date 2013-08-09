@@ -3,7 +3,6 @@ source ("coreTRA.R")
 source("standardization.R")
 source("demons.R")
 
-
 library(pastecs)
 library(fBasics)
 library (bbmle)
@@ -11,7 +10,6 @@ library(reshape2)
 library(dplR)
 library(ggplot2)
 library(gtools)
-library(ddply)
 library(plyr)
 
 # Saving options ####
@@ -110,30 +108,51 @@ jp.depth.A <- sample_depth_tra(jp.tra, 3, TRUE)
 
 
 # Fit the data using the three alternate models and regression functions ####
-jp.gam.ITA <- standardize_tra(jp.tra, model=list(I=TRUE, T=TRUE, A=TRUE), method="sfs")
-jp.gam.IT <- standardize_tra(jp.tra, model=list(I=TRUE, T=TRUE, A=FALSE), method="sfs")
-jp.gam.TA <-  standardize_tra(jp.tra, model=list(I=FALSE, T=TRUE, A=TRUE), method="sfs")
-jp.gam.T <-  standardize_tra(jp.tra, model=list(I=FALSE, T=TRUE, A=FALSE), method="sfs")
+jp.sfs.ITA <- standardize_tra(jp.tra, model=list(I=TRUE, T=TRUE, A=TRUE), method="sfs")
+jp.sfs.IT <- standardize_tra(jp.tra, model=list(I=TRUE, T=TRUE, A=FALSE), method="sfs")
+jp.sfs.TA <-  standardize_tra(jp.tra, model=list(I=FALSE, T=TRUE, A=TRUE), method="sfs")
+jp.sfs.T <-  standardize_tra(jp.tra, model=list(I=FALSE, T=TRUE, A=FALSE), method="sfs")
 
-# Compile CV ####
-I_jp <- data.frame(t(smartbind("ITA"=jp.gam.ITA$effects$I, "IT"=jp.gam.IT$effects$I)))
+# Compile effects ####
+I_jp <- data.frame(t(smartbind("ITA"=jp.sfs.ITA$effects$I, "IT"=jp.sfs.IT$effects$I)))
 I_jp$i <- rownames(I_jp)
 
-T_jp <- data.frame(t(smartbind("ITA"=jp.gam.ITA$effects$T, "IT"=jp.gam.IT$effects$T, "TA"=jp.gam.TA$effects$T, "T"=jp.gam.T$effects$T)))
+T_jp <- data.frame(t(smartbind("ITA"=jp.sfs.ITA$effects$T, "IT"=jp.sfs.IT$effects$T, "TA"=jp.sfs.TA$effects$T, "T"=jp.sfs.T$effects$T)))
 T_jp$t <- rownames(T_jp)
 
-
-A_jp <- as.data.frame(t(smartbind("ITA"=jp.gam.ITA$effects$A, "TA"=jp.gam.TA$effects$A)))
+A_jp <- as.data.frame(t(smartbind("ITA"=jp.sfs.ITA$effects$A, "TA"=jp.sfs.TA$effects$A)))
 A_jp$a <- rownames(A_jp)
+
+I_jp_upper <- data.frame("ITA"=jp.sfs.ITA$intervals$upper$I, "IT"=jp.sfs.IT$intervals$upper$I)
+I_jp_lower <- data.frame("ITA"=jp.sfs.ITA$intervals$lower$I, "IT"=jp.sfs.IT$intervals$lower$I)
+
+T_jp_upper <- data.frame("ITA"=jp.sfs.ITA$intervals$upper$T, "IT"=jp.sfs.IT$intervals$upper$T, "TA"=jp.sfs.TA$intervals$upper$T, "T"=jp.sfs.T$intervals$upper$T)
+T_jp_lower <-data.frame("ITA"=jp.sfs.ITA$intervals$lower$T, "IT"=jp.sfs.IT$intervals$lower$T, "TA"=jp.sfs.TA$intervals$lower$T, "T"=jp.sfs.T$intervals$lower$T)
+
+A_jp_upper <- data.frame("ITA"=jp.sfs.ITA$intervals$upper$A, "TA"=jp.sfs.TA$intervals$upper$A)
+A_jp_lower <- data.frame("ITA"=jp.sfs.ITA$intervals$lower$A, "TA"=jp.sfs.TA$intervals$lower$A)
 
 # Add information about the age of each tree
 I_jp$age <- unlist(lapply(levels(jp.tra$i), grab_age, tra=jp.tra))
 
+# Melt to a form appropriate for plotting
+I_df <- melt(I_jp, id.vars=c("i", "age"), measure.vars=c("ITA", "IT"))
+I_df$upper <- melt(I_jp_upper)$value
+I_df$lower <- melt(I_jp_lower)$value
+
+T_df <- melt(T_jp)
+T_df$upper <- melt(T_jp_upper)$value
+T_df$lower <- melt(T_jp_lower)$value
+
+A_df <- melt(A_jp)
+A_df$upper <- melt(A_jp_upper)$value
+A_df$lower <- melt(A_jp_lower)$value
+
 # Compile fit statistics ####
-jp.fit <- as.data.frame(t(data.frame(ITA=unlist(jp.gam.ITA$fit[3:13]),
-                     IT=unlist(jp.gam.IT$fit[3:13]),
-                     TA=unlist(jp.gam.TA$fit[3:13]),
-                     T=unlist(jp.gam.T$fit[3:13]))))
+jp.fit <- as.data.frame(t(data.frame(ITA=unlist(jp.sfs.ITA$fit[3:13]),
+                     IT=unlist(jp.sfs.IT$fit[3:13]),
+                     TA=unlist(jp.sfs.TA$fit[3:13]),
+                     T=unlist(jp.sfs.T$fit[3:13]))))
 
 jp.fit$dAIC <- jp.fit$AIC - min(jp.fit$AIC)
 jp.fit$dAIcC <- jp.fit$AICc - min(jp.fit$AICc)
@@ -151,16 +170,16 @@ sample_depth_plot <- ggplot(sample_depth_melt, aes(x=Year, y=value)) + geom_area
 
 # Plot I
 # Plot I vs age
-I_vs_age_plot <- ggplot(melt(I_jp, id.vars=c("i", "age"), measure.vars=c("ITA", "IT")), aes(x=age, y=value)) + geom_point() + geom_smooth(colour="black") + facet_grid(variable~.) + theme_bw() + ylab("Individual effect (I)") + xlab("Age")
+I_vs_age_plot <- ggplot(I_df, aes(x=age, y=value, ymin=lower, ymax=upper)) + geom_point() + geom_smooth(colour="black") + facet_grid(variable~.) + theme_bw() + ylab("Individual effect (I)") + xlab("Age") +geom_linerange()
 
 # Plot histogram of I
 I_hist <- ggplot(melt(I_jp, id.vars=c("i", "age"), measure.vars=c("ITA", "IT")), aes(x=value, colour=variable, fill=variable)) + geom_density(alpha=0.5)+theme_bw()+xlab("Individual effect (I)") + ylab("Density") + scale_fill_manual(values=c("grey20", "grey50")) + scale_colour_manual(values=c("grey20", "grey50"))+theme(legend.title=element_blank()) + theme(legend.position=c(0.9,0.85)) +  scale_x_log10(breaks=c(0.25, 0.5, 1, 2, 4), lim=c(0.25, 4))+geom_vline(x=1)
 
 # Plot T
-T_plot <- ggplot(melt(T_jp), aes(x=as.numeric(t), y=value)) + geom_line()+ facet_grid(variable~.)+theme_bw()+xlab("Year") + ylab("Time effect (T)") +geom_hline(y=1) + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000))
+T_plot <- ggplot(T_df, aes(x=as.numeric(t), y=value, ymin=lower, ymax=upper)) + geom_line()+ facet_grid(variable~.)+theme_bw()+xlab("Year") + ylab("Time effect (T)") +geom_hline(y=1) + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000)) +geom_ribbon(alpha=0.2)
 
 # Plot A
-A_plot <- ggplot(melt(A_jp), aes(x=as.numeric(a), y=value)) + geom_line()+ facet_grid(variable~.)+theme_bw()+xlab("Age") + ylab("Age effect (A) in mm")
+A_plot <- ggplot(A_df, aes(x=as.numeric(a), y=value, ymin=lower, ymax=upper)) + geom_line()+ facet_grid(variable~.)+theme_bw()+xlab("Age") + ylab("Age effect (A) in mm")+geom_ribbon(alpha=0.2)
 
 # Diagnostics ####
 
@@ -461,6 +480,27 @@ partial_response$var <- factor(partial_response$var, levels(partial_response$var
 
 clim_model_plot <- ggplot (data=partial_response, aes(x=x, y=response, colour=Model, fill=Model, ymax = response + 1.96*se, ymin=response - 1.96*se))+geom_line(size=1.5)+labs(y="Standardized partial predictions", x="Predictor variable")+theme_bw()+geom_ribbon(alpha=0.1)+geom_hline(y=0) + facet_wrap(~var, scales="free_x", ncol=1) + ylim(c(-0.4, 0.4)) + theme(legend.position="top")
 
+# Plot the impact of each predictor variable by time
+impact_by_time <- data.frame(Year=NA, variable=NA, value=NA, model=NA)[0,]
+for (i in 1:length(models)){
+  model <- models[[i]]
+  
+  partial_predictions <- as.data.frame(predict (model, type="terms"))
+  colnames(partial_predictions) <- c("iWUE", "Growing season GDD", "June maximum temperature",  "Summer precipitation (mm)", "Winter precipitation (mm)", "Growing season length (days)")
+  # partial_predictions$intercept <- model$coefficients[1]
+  partial_predictions$year <- rownames(partial_predictions)
+  
+  partial_predictions <- melt(partial_predictions)
+  partial_predictions$year <- as.numeric(partial_predictions$year)
+  partial_predictions$model <- c("GAM", "LM")[i]
+  
+  impact_by_time <- rbind(impact_by_time, partial_predictions)
+}
+
+
+ggplot(impact_by_time, aes(x=year, y=value)) + geom_line() + facet_grid(variable~model) +theme_bw() + ylab("Partial predictions") + xlab("Year")
+
+
 # Plot the predictor variables vs. time
 clim_df <- sel_clim
 names(clim_df) <- c("iWUE", "Growing season GDD", "June maximum temperature", "Summer precipitation (mm)", "Winter precipitation (mm)", "Growing season length (days)", "Ambient CO2 (ppm)")
@@ -518,10 +558,10 @@ ggsave("./Figures/sample_depth.svg", sample_depth_plot, width=8.5, height=3)
 ggsave("./Figures/sample_depth.pdf", sample_depth_plot, width=8.5, height=3)
 
 # Standardization
-save(jp.gam.ITA, file="./Results/jp.gam.ITA.RData")
-save(jp.gam.ITA, file="./Results/jp.gam.IT.RData")
-save(jp.gam.TA, file="./Results/jp.gam.TA.RData")
-save(jp.gam.T, file="./Results/jp.gam.T.RData")
+save(jp.sfs.ITA, file="./Results/jp.sfs.ITA.RData")
+save(jp.sfs.ITA, file="./Results/jp.sfs.IT.RData")
+save(jp.sfs.TA, file="./Results/jp.sfs.TA.RData")
+save(jp.sfs.T, file="./Results/jp.sfs.T.RData")
 
 write.csv(jp.fit, file="./Results/jp_fit.csv")
 
