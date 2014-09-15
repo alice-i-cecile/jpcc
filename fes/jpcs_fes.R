@@ -5,7 +5,7 @@ source("demons.R")
 
 library(pastecs)
 library(fBasics)
-library (bbmle)
+library(bbmle)
 library(reshape2)
 library(dplR)
 library(ggplot2)
