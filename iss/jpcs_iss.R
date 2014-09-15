@@ -1,12 +1,7 @@
 # Load dependencies ####
-
-library(pastecs)
-library(fBasics)
-library(bbmle)
 library(reshape2)
 library(dplR)
 library(ggplot2)
-library(gtools)
 library(plyr)
 library(mgcv)
 
@@ -68,7 +63,7 @@ deltaC_Atm <- deltaC_Atm[-1]
 deltaC_Atm <- data.frame(DC=deltaC_Atm[as.numeric(rownames(deltaC_Atm))<=2010 & as.numeric(rownames(deltaC_Atm))>=1877,])
 rownames(deltaC_Atm) <- 1877:2010
 
-# # Convert format to a tree ring table
+# Convert format to a tree ring table
 deltaC_Wood <-  dcast(raw_deltaC_Wood, Year~Site, value.var="X.13C.Wood", mean)
 deltaC_Wood[sapply(deltaC_Wood, is.nan)] <- NA
 rownames(deltaC_Wood) <- deltaC_Wood$Year
@@ -87,16 +82,20 @@ Wi <- Ca[[2]]/1.6*(1-(DeltaC-a)/(b-a))
 # Find average iWUE
 Wi_chron <- apply(Wi, FUN=mean, MARGIN=1, na.rm=T)
 
-# Plots of delta and Delta
+# Plots of delta, Delta and iWUE
 
 d13C_df <- data.frame(Year=as.numeric(rownames(deltaC_Wood)), value=rowMeans(deltaC_Wood, na.rm=T), reliable=(apply(deltaC_Wood, FUN=function(x){sum(!is.na(x))}, MARGIN=1)>=5))
 
 D13C_df <- data.frame(Year=as.numeric(rownames(DeltaC)), value=rowMeans(DeltaC, na.rm=T), reliable=(apply(DeltaC, FUN=function(x){sum(!is.na(x))}, MARGIN=1)>=5))
 
+Wi_df <- data.frame(Year=as.numeric(rownames(DeltaC)), value=Wi_chron, reliable=(apply(Wi, FUN=function(x){sum(!is.na(x))}, MARGIN=1)>=5))
+
 
 d13C_plot <- ggplot(d13C_df, aes(x=Year, y=value, linetype=reliable)) + geom_line() + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000)) + theme_bw() + ylab ("delta13C") + scale_linetype_manual(values=c("dotted", "solid")) + theme(legend.position="none")
 
 D13C_plot <- ggplot(D13C_df, aes(x=Year, y=value, linetype=reliable)) + geom_line() + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000)) + theme_bw() + ylab ("Delta13C") + scale_linetype_manual(values=c("dotted", "solid")) + theme(legend.position="none")
+
+Wi_plot <- ggplot(Wi_df, aes(x=Year, y=value, linetype=reliable)) + geom_line() + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000)) + theme_bw() + ylab ("iWUE") + scale_linetype_manual(values=c("dotted", "solid")) + theme(legend.position="none")
 
 # Find climate-growth links ####
 
@@ -114,7 +113,7 @@ full_clim <- full_clim[-1:-5]
 
 # Summer drought: June max temp
 # Winter prec.: February + March prec
-# Summer prec
+# Summer precipitation
 # Growing season length
 # Growing season GDD
 # WUE
@@ -245,25 +244,28 @@ clim_by_time_plot <- ggplot(data=partial_response, aes(x=year, y=data)) + facet_
 # Saving results ####
 
 # Standardization
-ggsave("./Figures/jp_chron_all_plot.svg", jp_chron_all_plot, width=8.5, height=3)
-ggsave("./Figures/jp_chron_all_plot.pdf", jp_chron_all_plot, width=8.5, height=3)
+ggsave("./iss/Figures/jp_chron_all_plot.svg", jp_chron_all_plot, width=8.5, height=3)
+ggsave("./iss/Figures/jp_chron_all_plot.pdf", jp_chron_all_plot, width=8.5, height=3)
 
-ggsave("./Figures/jp_chron_exp_plot.svg", jp_chron_all_plot, width=8.5, height=3)
-ggsave("./Figures/jp_chron_exp_plot.pdf", jp_chron_all_plot, width=8.5, height=3)
+ggsave("./iss/Figures/jp_chron_exp_plot.svg", jp_chron_exp_plot, width=8.5, height=3)
+ggsave("./iss/Figures/jp_chron_exp_plot.pdf", jp_chron_exp_plot, width=8.5, height=3)
 
 # Delta 13C
-ggsave("./Figures/d13C_plot.svg", d13C_plot, width=8.5, height=3)
-ggsave("./Figures/d13C_plot.pdf", d13C_plot, width=8.5, height=3)
+ggsave("./iss/Figures/d13C_plot.svg", d13C_plot, width=8.5, height=3)
+ggsave("./iss/Figures/d13C_plot.pdf", d13C_plot, width=8.5, height=3)
 
-ggsave("./Figures/D13C_plot.svg", D13C_plot, width=8.5, height=3)
-ggsave("./Figures/D13C_plot.pdf", D13C_plot, width=8.5, height=3)
+ggsave("./iss/Figures/Del13C_plot.svg", D13C_plot, width=8.5, height=3)
+ggsave("./iss/Figures/Del13C_plot.pdf", D13C_plot, width=8.5, height=3)
 
-ggsave("./Figures/Wi_I_hist.svg", Wi_I_hist, width=8.5, height=3)
-ggsave("./Figures/Wi_I_hist.pdf", Wi_I_hist, width=8.5, height=3)
-ggsave("./Figures/Wi_T_plot.svg", Wi_T_plot, width=8.5, height=6)
-ggsave("./Figures/Wi_T_plot.pdf", Wi_T_plot, width=8.5, height=6)
-ggsave("./Figures/Wi_A_plot.svg", Wi_A_plot, width=8.5, height=3)
-ggsave("./Figures/Wi_A_plot.pdf", Wi_A_plot, width=8.5, height=3)
+ggsave("./iss/Figures/Wi_plot.svg", Wi_plot, width=8.5, height=3)
+ggsave("./iss/Figures/Wi_plot.pdf", Wi_plot, width=8.5, height=3)
 
 # Climate response
+ggsave("./iss/Figures/clim_partial_predictions_plot .svg", clim_partial_predictions_plot, width=8.5, height=3)
+ggsave("./iss/Figures/clim_partial_predictions_plot.pdf", clim_partial_predictions_plot, width=8.5, height=3)
 
+ggsave("./iss/Figures/clim_predictions_by_time_plot.svg", clim_predictions_by_time_plot, width=8.5, height=3)
+ggsave("./iss/Figures/clim_predictions_by_time_plot.pdf", clim_predictions_by_time_plot, width=8.5, height=3)
+
+ggsave("./iss/Figures/clim_by_time_plot.svg", clim_by_time_plot, width=3, height=8.5)
+ggsave("./iss/Figures/clim_by_time_plot.pdf", clim_by_time_plot, width=3, height=8.5)
