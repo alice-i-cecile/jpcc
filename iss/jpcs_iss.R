@@ -19,101 +19,40 @@ figure_path <- paste(getwd(), "Figures", "Pinus_banksiana", sep="/")
 pdf_width=11
 pdf_height=8.5
 
-# Jack pine site functions ####
-
-getSite <- function (I.names){
-  sites <- sapply(I.names, substr, 1, 3)
-  
-  df <- data.frame (Tree=I.names, Site=sites)
-  
-  return (df)
-}
-
-firstYear <- function (index, tra){
-  full <- which(!is.na(tra[index,,]), arr.ind=T)
-  first <- min (full[[1]])
-  return (first)
-}
-
-getSiteStart <- function (tra){
-  I.names <- dimnames(tra)[[1]]
-  
-  # Get site code for each core
-  sites <- getSite(I.names)
-  
-  # Find first year of each core
-  firstYears <- vector ()
-  for (i in I.names){
-    firstYears[i] <- firstYear (i, tra)
-  }
-  
-  siteStart <- vector()
-  
-  # Find first year for each site
-  for (s in levels(sites$Site)){
-    allTreesFirst <- firstYears [sites [which(sites$Site==s), "Tree"]]
-    
-    siteStart[s] <- min (allTreesFirst)
-    
-    # Convert from index to real year
-    siteStart[s] <- dimnames(tra)[[2]][as.numeric(siteStart[s])]
-  }
-  
-  return (siteStart)
-}
-
-evenAgedTRA <- function (rwl){
-  simpleTRA <- rwl.to.tra(rwl)
-  
-  siteStarts <- getSiteStart (simpleTRA)
-  
-  siteDF <- getSite (dimnames(simpleTRA)[[1]])
-  
-  newTreeStarts <- vector()
-  
-  for (i in dimnames(simpleTRA)[[1]]){
-    site <- siteDF[which (siteDF$Tree==i), "Site"]
-    newTreeStarts[i] <- siteStarts[site]
-  }
-  
-  evenTRA <- rwl.to.tra (rwl, newTreeStarts)
-  
-  return (evenTRA)
-}
-
 # Jack pine analysis ##################################################
 
 # Load data ####
 
 jp <- read.rwl ("./Data/jpcs.rwl")
 
-# Convert 0 values to NA
-jp[which(jp==0, arr.ind=T)] <- NA
+# Remove trees less than 30 years old
+# young_trees <- apply(jp, FUN=function(x){sum(!is.na(x))}, MARGIN=2)<=30
+# 
+# jp <- jp[!young_trees]
+
+# Remove recent years
+jp <- jp[-which((rownames(jp) %in% c("2011"))),]
 
 # Standardize using modified negative exponential curve
+jp_exp <- detrend(jp, method="ModNegExp", make.plot=F)
+jp_exp_chron <- chron(jp_exp, prefix="jpx", biweight=F, prewhiten=F)
 
 # Standardize using splines
+jp_spl <- detrend(jp, method="Spline", make.plot=F)
+jp_spl_chron <- chron(jp_spl, prefix="jps", biweight=F, prewhiten=F)
 
-# Plotting sample depth ####
-sample_depth_melt <- melt(jp.depth.T)
-sample_depth_melt$Year <- as.numeric(rownames(sample_depth_melt))
+# Standardize using flat detrending
+jp_mean <- detrend(jp, method="Mean", make.plot=F)
+jp_mean_chron <- chron(jp_mean, prefix="jpm", biweight=F, prewhiten=F)
 
-sample_depth_plot <- ggplot(sample_depth_melt, aes(x=Year, y=value)) + geom_area() + theme_bw() + ylab("Number of series in chronology")
+# Combining information
+jp_chron <- data.frame(Year=as.numeric(rownames(jp_exp_chron)), Exp=jp_exp_chron[[1]], Spl=jp_spl_chron[[1]], Flat =jp_mean_chron[[1]], Samples=jp_spl_chron[[2]])
 
-# Plotting effects ####
+jp_chron_melt <- melt(jp_chron[,1:4], id.vars="Year")
 
-# Plot I
-# Plot I vs age
-I_vs_age_plot <- ggplot(I_df, aes(x=age, y=value)) + geom_point() + geom_smooth(colour="black") + facet_grid(variable~.) + theme_bw() + ylab("Individual effect (I)") + xlab("Age")
+# Plotting chronology ####
 
-# Plot histogram of I
-I_hist <- ggplot(I_df, aes(x=value, colour=variable, fill=variable)) + geom_density(alpha=0.5)+theme_bw()+xlab("Individual effect (I)") + ylab("Density") + scale_fill_manual(values=c("grey20", "grey50")) + scale_colour_manual(values=c("grey20", "grey50"))+theme(legend.title=element_blank()) + theme(legend.position=c(0.9,0.85)) +  scale_x_log10(breaks=c(0.25, 0.5, 1, 2, 4), lim=c(0.25, 4))+geom_vline(x=1)
-
-# Plot T
-T_plot <- ggplot(T_df, aes(x=as.numeric(t), y=value, linetype=reliable)) + geom_line()+ facet_grid(variable~.)+theme_bw()+xlab("Year") + ylab("Time effect (T)") +geom_hline(y=1) + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000)) + scale_linetype_manual(values=c("dotted", "solid")) + theme(legend.position="none")
-
-# Plot A
-A_plot <- ggplot(A_df, aes(x=as.numeric(a), y=value, linetype=reliable)) + geom_line()+ facet_grid(variable~.)+theme_bw()+xlab("Age") + ylab("Age effect (A) in mm") + scale_linetype_manual(values=c("dotted", "solid")) + theme(legend.position="none")
+ggplot(jp_chron_melt, aes(x=Year, y=value, colour=variable)) + geom_line()
 
 # Carbon-13 analysis ####
 raw_deltaC_Wood <- read.csv("./Data/tree_13c.csv")
@@ -140,27 +79,22 @@ DeltaC <- (deltaC_Atm[[1]]-deltaC_Wood)/(1000+deltaC_Wood)*1000
 # Convert to iWUE
 # Do not Standardize iWUE data
 
+a <- 4.4
 b <- 27
 Wi <- Ca[[2]]/1.6*(1-(DeltaC-a)/(b-a))
 
-
 # Plots of delta and Delta
 
-d13C_plot <- ggplot(data.frame(Year=as.numeric(rownames(deltaC_Wood)), value=rowMeans(deltaC_Wood, na.rm=T), reliable=Wi.depth.T >= 5), aes(x=Year, y=value, linetype=reliable)) + geom_line() + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000)) + theme_bw() + ylab ("delta13C") + scale_linetype_manual(values=c("dotted", "solid")) + theme(legend.position="none")
+d13C_df <- data.frame(Year=as.numeric(rownames(deltaC_Wood)), value=rowMeans(deltaC_Wood, na.rm=T), reliable=(apply(deltaC_Wood, FUN=function(x){sum(!is.na(x))}, MARGIN=1)>=5))
 
-D13C_plot <- ggplot(data.frame(Year=as.numeric(rownames(DeltaC)), value=rowMeans(DeltaC, na.rm=T), reliable=Wi.depth.T >= 5), aes(x=Year, y=value, linetype=reliable)) + geom_line() + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000)) + theme_bw() + ylab ("Delta13C") + scale_linetype_manual(values=c("dotted", "solid")) + theme(legend.position="none")
+D13C_df <- data.frame(Year=as.numeric(rownames(DeltaC)), value=rowMeans(DeltaC, na.rm=T), reliable=(apply(DeltaC, FUN=function(x){sum(!is.na(x))}, MARGIN=1)>=5))
+
+
+d13C_plot <- ggplot(d13C_df, aes(x=Year, y=value, linetype=reliable)) + geom_line() + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000)) + theme_bw() + ylab ("delta13C") + scale_linetype_manual(values=c("dotted", "solid")) + theme(legend.position="none")
+
+D13C_plot <- ggplot(D13C_df, aes(x=Year, y=value, linetype=reliable)) + geom_line() + scale_x_continuous(breaks=c(1850, 1900, 1950, 2000)) + theme_bw() + ylab ("Delta13C") + scale_linetype_manual(values=c("dotted", "solid")) + theme(legend.position="none")
 
 # Find climate-growth links ####
-# Preprocess forcing info from tree rings
-time_ITA <- T_jp$ITA[as.numeric(rownames(T_jp))<=2007 & as.numeric(rownames(T_jp))>=1901]
-time_IT <- T_jp$IT[as.numeric(rownames(T_jp))<=2007 & as.numeric(rownames(T_jp))>=1901]
-time_TA <- T_jp$TA[as.numeric(rownames(T_jp))<=2007 & as.numeric(rownames(T_jp))>=1901]
-time_T <- T_jp$T[as.numeric(rownames(T_jp))<=2007 & as.numeric(rownames(T_jp))>=1901]
-
-names(time_ITA) <- 1901:2007
-names(time_IT) <- 1901:2007
-names(time_TA) <- 1901:2007
-names(time_T) <- 1901:2007
 
 # Load climate data
 jp.clim <- read.csv("./Data/IgnaceClimate.csv")
@@ -170,53 +104,7 @@ full_clim <- as.data.frame(read.csv("./Data/full_clim.csv", header=T))
 rownames(full_clim) <- full_clim[[1]]
 full_clim <- full_clim[-1:-5]
 
-# Basic climate correlations and response ####
-library(bootRes)
-
-# Computing responses
-resp_ITA <- dcc(data.frame(chron=time_ITA, samp.depth=jp.depth.T[30:136]), jp.clim, method="r", start=2, end=10)
-resp_IT <- dcc(data.frame(chron=time_IT, samp.depth=jp.depth.T[30:136]), jp.clim, method="r", start=2, end=10)
-resp_TA <- dcc(data.frame(chron=time_TA, samp.depth=jp.depth.T[30:136]), jp.clim, method="r", start=2, end=10)
-resp_T <- dcc(data.frame(chron=time_T, samp.depth=jp.depth.T[30:136]), jp.clim, method="r", start=2, end=10)
-
-# Cleaning responses
-annotate_response <- function(dcc_out, id)
-{
-  split_code <- strsplit(rownames(dcc_out), split=".curr.")
-  dcc_out$var <- sapply(split_code, function(x){x[1]})
-  dcc_out$month <- sapply(split_code, function(x){x[2]})
-  dcc_out$id <- id
-  
-  return(dcc_out)
-}
-
-resp_ITA <- annotate_response(resp_ITA, "ITA")
-resp_IT <- annotate_response(resp_IT, "IT")
-resp_TA <- annotate_response(resp_TA, "TA")
-resp_T <- annotate_response(resp_T, "T")
-
-resp_all <- rbind(resp_ITA, resp_IT, resp_TA, resp_T)
-resp_all$month[resp_all$month=="apr"] <- "April"
-resp_all$month[resp_all$month=="aug"] <- "August"
-resp_all$month[resp_all$month=="dec"] <- "December"
-resp_all$month[resp_all$month=="feb"] <- "February"
-resp_all$month[resp_all$month=="jan"] <- "January"
-resp_all$month[resp_all$month=="jul"] <- "July"
-resp_all$month[resp_all$month=="jun"] <- "June"
-resp_all$month[resp_all$month=="mar"] <- "March"
-resp_all$month[resp_all$month=="may"] <- "May"
-resp_all$month[resp_all$month=="nov"] <- "November"
-resp_all$month[resp_all$month=="oct"] <- "October"
-resp_all$month[resp_all$month=="sep"] <- "September"
-
-resp_all$month <- factor(resp_all$month, unique(resp_all$month))
-resp_all$id <- factor(resp_all$id, unique(resp_all$id))
-resp_all$var <- factor(resp_all$var, unique(resp_all$var))
-
-# Plotting
-response_plot <- ggplot(resp_all, aes(x=id, y=coef, fill=id)) + geom_bar(stat="identity") + facet_grid(month~var) + theme_bw() + xlab("Standardization model") + ylab("Standardized growth-climate response") + geom_hline(y=0) + geom_linerange(aes(ymin=ci.lower, ymax=ci.upper)) + scale_fill_manual(values=c("darkorchid3", "red", "blue", "grey40")) + guides(fill=FALSE)
-
-# GAM and linear models on prelim relations ####
+# GAM and generalized linear models on prelim relations ####
 
 # Summer drought: June max temp
 # Winter prec.: February + March prec
