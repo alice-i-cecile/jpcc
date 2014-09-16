@@ -121,7 +121,7 @@ full_clim <- full_clim[-1:-5]
 # Compiling relevant independent variables
 sel_clim <- full_clim[c("gdd.above.base_temp.for.period.3", "Total.precipitation.for.period.3","Number.of.days.of.growing.season", "June.mean.monthly.maximum.temperature")]
 names(sel_clim) <- c("GDD", "summer_prec", "growing_season_length", "june_max")
-sel_clim$winter_prec <- full_clim$February.mean.monthly.precipitation + full_clim$March.mean.monthly.precipitation
+#sel_clim$winter_prec <- full_clim$February.mean.monthly.precipitation + full_clim$March.mean.monthly.precipitation
 sel_clim$year <- as.numeric(rownames(sel_clim))
 
 # Truncate chronology to only matching years
@@ -140,7 +140,7 @@ clim_rw_glm <- gam(rw_response~
                         sel_clim[["GDD"]]+
                         sel_clim[["june_max"]]+                                    
                         sel_clim[["summer_prec"]]+
-                        sel_clim[["winter_prec"]]+                  
+                        #sel_clim[["winter_prec"]]+                  
                         sel_clim[["growing_season_length"]], 
                         family=gaussian(link="log"))
 
@@ -148,7 +148,7 @@ clim_rw_gam <- gam(rw_response~
                         s(sel_clim[["GDD"]])+
                         s(sel_clim[["june_max"]])+                                    
                         s(sel_clim[["summer_prec"]])+
-                        s(sel_clim[["winter_prec"]])+                  
+                        #s(sel_clim[["winter_prec"]])+                  
                         s(sel_clim[["growing_season_length"]]), 
                         family=gaussian(link="log"))
 
@@ -161,7 +161,7 @@ clim_D13C_glm <- gam(D13C_response~
                      D13C_clim[["GDD"]]+
                      D13C_clim[["june_max"]]+                                    
                      D13C_clim[["summer_prec"]]+
-                     D13C_clim[["winter_prec"]]+                  
+                     #D13C_clim[["winter_prec"]]+                  
                      D13C_clim[["growing_season_length"]], 
                    family=gaussian())
 
@@ -169,7 +169,7 @@ clim_D13C_gam <- gam(D13C_response~
                      s(D13C_clim[["GDD"]])+
                      s(D13C_clim[["june_max"]])+                                    
                      s(D13C_clim[["summer_prec"]])+
-                     s(D13C_clim[["winter_prec"]])+                  
+                     #s(D13C_clim[["winter_prec"]])+                  
                      s(D13C_clim[["growing_season_length"]]), 
                    family=gaussian())
 
@@ -182,13 +182,13 @@ summary(clim_D13C_gam)
 predictors <- c("GDD", 
                 "june_max", 
                 "summer_prec", 
-                "winter_prec", 
+                #"winter_prec", 
                 "growing_season_length")
 
 predictor_names <- c("Growing season GDD", 
                    "June maximum temperature",  
                    "Summer precipitation (mm)", 
-                   "Winter precipitation (mm)", 
+                   #"Winter precipitation (mm)", 
                    "Growing season length (days)")
 
 models <- list(clim_rw_glm, clim_D13C_glm)
@@ -225,10 +225,11 @@ levels(partial_response$var) <- c("Growing season GDD",
                                   "Growing season length (days)", 
                                   "June maximum temperature", 
                                   "Summer precipitation (mm)", 
-                                  "Winter precipitation (mm)"
+                                  #"Winter precipitation (mm)"
                                   )
+# Rearranging levels to control order on plots
 # c(5,4,3,1,2,6)
-partial_response$var <- factor(partial_response$var, levels(partial_response$var)[c(4,3,2,1,5)])
+#partial_response$var <- factor(partial_response$var, levels(partial_response$var)[c(4,3,2,1,5)])
 
 # Plot partial predictions
 
